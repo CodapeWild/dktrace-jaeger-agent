@@ -7,10 +7,14 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/CodapeWild/devtools/idflaker"
-	jconfig "github.com/uber/jaeger-client-go/config"
+	"github.com/opentracing/opentracing-go"
+	jaeger "github.com/uber/jaeger-client-go"
+	"github.com/uber/jaeger-client-go/transport"
+	"github.com/uber/jaeger-client-go/utils"
 )
 
 var (
@@ -54,23 +58,47 @@ type span struct {
 }
 
 func main() {
-	jcfg := jconfig.Configuration{
-		ServiceName: cfg.Service,
-		Reporter: &jconfig.ReporterConfig{
-			CollectorEndpoint: fmt.Sprintf("%s://%s", cfg.Protocol, agentAddress),
-		},
+	var trans jaeger.Transport
+	switch cfg.Protocol {
+	case "http":
+		urlStr := fmt.Sprintf("http://%s%s", cfg.DkAgent, path)
+		log.Printf("Jaeger Agent Address: %s", urlStr)
+		trans = transport.NewHTTPTransport(urlStr)
+		// TODO: start HTTP agent to accept message
+	case "udp":
+		var err error
+		if trans, err = jaeger.NewUDPTransport(agentAddress, utils.UDPPacketMaxLength); err != nil {
+			log.Fatalln(err.Error())
+		}
+		// TODO: start UDP agent to accept packet
+	default:
+		log.Fatalln(fmt.Printf("unsupported scheme: %s\n", cfg.Protocol))
 	}
-	closer, err := jcfg.InitGlobalTracer(cfg.Service)
-	if err != nil {
-		log.Fatalln(err.Error())
-	}
-	defer closer.Close()
 
+	reporter := jaeger.NewRemoteReporter(trans)
+	defer reporter.Close()
+
+	tracer, closer := jaeger.NewTracer(cfg.Service, jaeger.NewConstSampler(true), reporter)
+	defer closer.Close()
+	opentracing.SetGlobalTracer(tracer)
+
+	span := tracer.StartSpan("root")
+	defer span.Finish()
+
+	foo1(span.Context())
 }
 
-func foo1() {}
+func foo1(ctx opentracing.SpanContext) {
+	span := opentracing.GlobalTracer().StartSpan("foo1", opentracing.ChildOf(ctx))
+	defer span.Finish()
 
-func foo3() {}
+	foo2(span.Context())
+}
+
+func foo2(ctx opentracing.SpanContext) {
+	span := opentracing.GlobalTracer().StartSpan("foo2", opentracing.ChildOf(ctx))
+	defer span.Finish()
+}
 
 func init() {
 	log.SetOutput(os.Stdout)
@@ -85,6 +113,7 @@ func init() {
 	if err = json.Unmarshal(data, cfg); err != nil {
 		log.Fatalln(err.Error())
 	}
+	cfg.Protocol = strings.ToLower(cfg.Protocol)
 
 	if idflk, err = idflaker.NewIdFlaker(66); err != nil {
 		log.Fatalln(err.Error())
