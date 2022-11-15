@@ -1,6 +1,6 @@
 {
-  "dk_agent": "127.0.0.1:9529",
-  "protocol": "http",
+  "dk_agent": "127.0.0.1:6831",
+  "protocol": "udp",
   "sender": {
     "threads": 100,
     "send_count": 1000
@@ -69,8 +69,8 @@
       ]
     },
     {
-      "resource": "redis.set",
-      "operation": "set",
+      "resource": "redis",
+      "operation": "redis.set",
       "span_type": "cache",
       "duration": 150,
       "tags": [
