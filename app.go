@@ -212,7 +212,7 @@ func init() {
 
 	globalCloser = make(chan struct{})
 
-	if idflk, err = idflaker.NewIdFlaker(66); err != nil {
+	if idflk, err = idflaker.NewIdFlaker(33); err != nil {
 		log.Fatalln(err.Error())
 	}
 
