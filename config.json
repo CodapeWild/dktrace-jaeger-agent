@@ -1,6 +1,6 @@
 {
-  "dk_agent": "127.0.0.1:6831",
-  "protocol": "udp",
+  "dk_agent": "127.0.0.1:9529",
+  "protocol": "http",
   "sender": {
     "threads": 100,
     "send_count": 1000

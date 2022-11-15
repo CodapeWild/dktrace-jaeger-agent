@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -18,9 +21,11 @@ func startHTTPAgent() {
 	log.Printf("### start Jaeger APM agent(HTTP) %s\n", agentAddress)
 
 	svr := getTimeoutServer(agentAddress, http.HandlerFunc(handleJaegerTraceData))
-	if err := svr.ListenAndServe(); err != nil {
-		log.Fatalln(err.Error())
-	}
+	go func() {
+		if err := svr.ListenAndServe(); err != nil {
+			log.Fatalln(err.Error())
+		}
+	}()
 }
 
 func getTimeoutServer(address string, handler http.Handler) *http.Server {
@@ -35,11 +40,83 @@ func getTimeoutServer(address string, handler http.Handler) *http.Server {
 }
 
 func handleJaegerTraceData(resp http.ResponseWriter, req *http.Request) {
+	log.Println("### Jaeger APM original headers:")
+	for k, v := range req.Header {
+		log.Printf("%s: %v\n", k, v)
+	}
 
+	resp.WriteHeader(http.StatusOK)
+
+	buf, err := io.ReadAll(req.Body)
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	sendTraceOverHTTP(cfg.DkAgent, buf, fmt.Sprintf("http://%s%s", cfg.DkAgent, path), req.Header)
 }
 
-func sendTraceByHTTP(buf []byte) {
+func sendTraceOverHTTP(dkAgent string, buf []byte, endpoint string, header http.Header) {
+	batch := decodeBinaryProtocol(buf)
 
+	wg := &sync.WaitGroup{}
+	wg.Add(cfg.Sender.Threads)
+	for i := 0; i < cfg.Sender.Threads; i++ {
+		dupi := shallowCopyBatch(batch)
+
+		go func(batch *jaeger.Batch) {
+			for j := 0; j < cfg.Sender.SendCount; j++ {
+				modifyTraceID(batch)
+				buf := encodeBinaryProtocol(dupi)
+
+				req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBuffer(buf))
+				if err != nil {
+					log.Fatalln(err.Error())
+				}
+				req.Header = header
+
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					log.Println(err.Error())
+					continue
+				}
+				log.Println(resp.Status)
+				resp.Body.Close()
+			}
+		}(dupi)
+	}
+	wg.Wait()
+
+	close(globalCloser)
+}
+
+func decodeBinaryProtocol(buf []byte) *jaeger.Batch {
+	tmbuf := thrift.NewTMemoryBuffer()
+	_, err := tmbuf.ReadFrom(bytes.NewBuffer(buf))
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	var (
+		transport = thrift.NewTBinaryProtocolConf(tmbuf, &thrift.TConfiguration{})
+		batch     = &jaeger.Batch{}
+	)
+	if err = batch.Read(context.Background(), transport); err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	return batch
+}
+
+func encodeBinaryProtocol(batch *jaeger.Batch) []byte {
+	var (
+		tmbuf     = thrift.NewTMemoryBuffer()
+		transport = thrift.NewTBinaryProtocolConf(tmbuf, &thrift.TConfiguration{})
+	)
+	if err := batch.Write(context.Background(), transport); err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	return tmbuf.Bytes()
 }
 
 func startUDPAgent() {
@@ -71,12 +148,12 @@ func startUDPAgent() {
 				continue
 			}
 
-			sendTraceByUDP(cfg.DkAgent, buf[:n])
+			sendTraceOverUDP(cfg.DkAgent, buf[:n])
 		}
 	}()
 }
 
-func sendTraceByUDP(dkAgent string, buf []byte) {
+func sendTraceOverUDP(dkAgent string, buf []byte) {
 	conn, err := net.Dial("udp", dkAgent)
 	if err != nil {
 		log.Fatalln(err.Error())

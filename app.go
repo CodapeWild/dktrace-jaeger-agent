@@ -21,7 +21,7 @@ import (
 var (
 	cfg          *config
 	idflk        *idflaker.IDFlaker
-	globalCloser = make(chan struct{})
+	globalCloser chan struct{}
 	agentAddress = "127.0.0.1:"
 	path         = "/apis/traces"
 )
@@ -105,13 +105,13 @@ func main() {
 		urlStr := fmt.Sprintf("http://%s%s", agentAddress, path)
 		log.Printf("Jaeger HTTP Agent Address: %s", urlStr)
 		trans = transport.NewHTTPTransport(urlStr)
-		// TODO: start HTTP agent to accept message
+		startHTTPAgent()
 	case "udp":
 		var err error
 		if trans, err = jaeger.NewUDPTransport(agentAddress, utils.UDPPacketMaxLength); err != nil {
 			log.Fatalln(err.Error())
 		}
-		log.Printf("Jaeger UDP Agent Address: %s", cfg.DkAgent)
+		log.Printf("Jaeger UDP Agent Address: %s", agentAddress)
 		startUDPAgent()
 	default:
 		log.Fatalln(fmt.Printf("unsupported scheme: %s\n", strings.ToUpper(cfg.Protocol)))
@@ -202,10 +202,15 @@ func init() {
 	if err = json.Unmarshal(data, cfg); err != nil {
 		log.Fatalln(err.Error())
 	}
+	if cfg.Sender == nil || cfg.Sender.Threads <= 0 || cfg.Sender.SendCount <= 0 {
+		log.Fatalln("sender not configured properly")
+	}
 	if len(cfg.Trace) == 0 {
 		log.Fatalln("empty trace")
 	}
 	cfg.Protocol = strings.ToLower(cfg.Protocol)
+
+	globalCloser = make(chan struct{})
 
 	if idflk, err = idflaker.NewIdFlaker(66); err != nil {
 		log.Fatalln(err.Error())
