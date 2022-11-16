@@ -126,7 +126,7 @@ func main() {
 
 	root, children := startRootSpan(cfg.Trace)
 	orchestrator(root, children)
-	time.Sleep(6 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	<-globalCloser
 }
